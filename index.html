@@ -2375,6 +2375,8 @@
 
       // Shuffle A/B/C/D options inside each Reading question
       shuffleReadingOptions: true,
+      shuffleListeningQuestions: false,
+      shuffleListeningOptions: false,
 
       // Quiz scores saved in localStorage: { [`${skill}_${testId}`]: { latest, best, total } }
       quizScores: {},
@@ -2413,6 +2415,8 @@
           if (typeof parsed.part1RandomCount === 'number') state.part1RandomCount = parsed.part1RandomCount;
           if (typeof parsed.shufflePassageQuestions === 'boolean') state.shufflePassageQuestions = parsed.shufflePassageQuestions;
           if (typeof parsed.shuffleReadingOptions === 'boolean') state.shuffleReadingOptions = parsed.shuffleReadingOptions;
+          if (typeof parsed.shuffleListeningQuestions === 'boolean') state.shuffleListeningQuestions = parsed.shuffleListeningQuestions;
+          if (typeof parsed.shuffleListeningOptions === 'boolean') state.shuffleListeningOptions = parsed.shuffleListeningOptions;
         }
       } catch (err) {
         console.warn('Could not load localStorage:', err);
@@ -2455,59 +2459,39 @@
           speechRate: state.speechRate,
           part1RandomCount: state.part1RandomCount,
           shufflePassageQuestions: state.shufflePassageQuestions,
-          shuffleReadingOptions: state.shuffleReadingOptions
+          shuffleReadingOptions: state.shuffleReadingOptions,
+          shuffleListeningQuestions: state.shuffleListeningQuestions,
+          shuffleListeningOptions: state.shuffleListeningOptions
         }));
       } catch (e) {}
     }
 
-    function toggleShufflePassageQuestions() {
-      state.shufflePassageQuestions = !state.shufflePassageQuestions;
+    function toggleQuizShuffle(setting) {
+      state[setting] = !state[setting];
       saveSettings();
       playSound('click');
       renderApp();
-      showToast(
-        state.shufflePassageQuestions
-          ? 'Đã bật: Đảo thứ tự câu hỏi trong mỗi Passage'
-          : 'Đã tắt: Giữ nguyên thứ tự câu 1 → 10 trong mỗi Passage',
-        'info'
-      );
-    }
-
-    function toggleShuffleReadingOptions() {
-      state.shuffleReadingOptions = !state.shuffleReadingOptions;
-      saveSettings();
-      playSound('click');
-      renderApp();
-      showToast(
-        state.shuffleReadingOptions
-          ? 'Đã bật: Đảo thứ tự đáp án A, B, C, D trong mỗi câu'
-          : 'Đã tắt: Giữ nguyên thứ tự đáp án A, B, C, D gốc',
-        'info'
-      );
     }
 
     function shuffleQuestionOptions(question) {
-      if (!question || !Array.isArray(question.options)) return question;
+      // Letter references depend on the original positions of the choices.
+      const letterReference = /^(?:both\s+)?[a-d]\s+(?:and|or)\s+[a-d](?:\s+together)?\.?$/i;
+      if (question.options.some(option => letterReference.test(option.trim()))) return question;
 
-      // Keep meta-options like "none of the above" or "B and C together" anchored at the bottom if present
-      const anchoredPattern = /^(none of the above|all of the above|all of these|both\s+[a-d]\s+and\s+[a-d]|[a-d]\s+and\s+[a-d]\s+together)\.?$/i;
-
-      const indexed = question.options.map((text, idx) => ({
-        text,
-        isCorrect: idx === question.answer,
-        isAnchored: anchoredPattern.test(String(text || '').trim())
-      }));
-
-      const movable = shuffleArray(indexed.filter(item => !item.isAnchored));
-      const anchored = indexed.filter(item => item.isAnchored);
-      const merged = [...movable, ...anchored];
-
-      const newAnswerIndex = merged.findIndex(item => item.isCorrect);
+      const anchoredOption = /^(?:none of the above|all of the above|all of these)\.?$/i;
+      const movableIndices = question.options.flatMap((option, index) =>
+        option.trim() && !anchoredOption.test(option.trim()) ? [index] : []
+      );
+      const shuffledIndices = shuffleArray(movableIndices);
+      const optionOrder = question.options.map((_, index) => index);
+      movableIndices.forEach((index, position) => {
+        optionOrder[index] = shuffledIndices[position];
+      });
 
       return {
         ...question,
-        options: merged.map(item => item.text),
-        answer: newAnswerIndex >= 0 ? newAnswerIndex : question.answer
+        options: optionOrder.map(index => question.options[index]),
+        answer: optionOrder.indexOf(question.answer)
       };
     }
 
@@ -3884,6 +3868,9 @@
       const isReading = skill === 'reading';
       const label = isReading ? 'Đọc (Reading)' : 'Nghe (Listening)';
       const shortName = isReading ? 'Đọc' : 'Nghe';
+      const skillName = isReading ? 'Reading' : 'Listening';
+      const questionSetting = isReading ? 'shufflePassageQuestions' : 'shuffleListeningQuestions';
+      const optionSetting = isReading ? 'shuffleReadingOptions' : 'shuffleListeningOptions';
       const icon = isReading ? '📖' : '🎧';
       const tests = getTestsForSkill(skill);
 
@@ -3898,30 +3885,33 @@
               <h2 class="font-display font-bold text-2xl text-slate-800">Danh sách đề thi ${shortName}</h2>
               <p class="text-sm text-slate-500">
                 ${isReading
-                  ? 'Mỗi đề gồm 4 Passage (mỗi Passage 10 câu). Có thể luyện riêng từng Passage hoặc làm Full 40 câu với thứ tự câu được đảo ngẫu nhiên.'
-                  : 'Thêm bộ đề và đáp án của riêng bạn để luyện làm trắc nghiệm tính giờ và chấm điểm tự động.'}
+                  ? 'Mỗi đề gồm 4 Passage (mỗi Passage 10 câu). Có thể luyện từng Passage, làm trọn một đề hoặc làm tất cả bộ đề.'
+                  : 'Có thể luyện từng Part, làm trọn một đề hoặc làm tất cả bộ đề.'}
               </p>
             </div>
 
             <div class="flex flex-wrap items-center gap-2.5 self-start lg:self-center">
-              ${isReading ? `
-                <button onclick="toggleShufflePassageQuestions()" class="px-3.5 py-2.5 rounded-2xl border text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
-                  state.shufflePassageQuestions
+                ${tests.length ? `
+                  <button type="button" onclick="startSkillQuiz('${skill}')" class="px-4 py-2.5 rounded-2xl bg-pastelBlue-100 hover:bg-pastelBlue-200 text-sky-800 text-xs sm:text-sm font-bold transition">
+                    Làm tất cả ${skillName} (${tests.length} bộ)
+                  </button>
+                ` : ''}
+                <button type="button" onclick="toggleQuizShuffle('${questionSetting}')" aria-pressed="${state[questionSetting]}" class="px-3.5 py-2.5 rounded-2xl border text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
+                  state[questionSetting]
                     ? 'bg-pastelMint-50 border-pastelMint-300 text-emerald-800'
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                 }">
                   <span>🔀</span>
-                  <span>Đảo câu: ${state.shufflePassageQuestions ? 'Bật' : 'Tắt'}</span>
+                  <span>Đảo câu: ${state[questionSetting] ? 'Bật' : 'Tắt'}</span>
                 </button>
-                <button onclick="toggleShuffleReadingOptions()" class="px-3.5 py-2.5 rounded-2xl border text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
-                  state.shuffleReadingOptions
+                <button type="button" onclick="toggleQuizShuffle('${optionSetting}')" aria-pressed="${state[optionSetting]}" class="px-3.5 py-2.5 rounded-2xl border text-xs sm:text-sm font-bold transition flex items-center gap-1.5 ${
+                  state[optionSetting]
                     ? 'bg-pastelBlue-50 border-pastelBlue-300 text-sky-800'
                     : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                 }">
                   <span>🎲</span>
-                  <span>Đảo A/B/C/D: ${state.shuffleReadingOptions ? 'Bật' : 'Tắt'}</span>
+                  <span>Đảo A/B/C/D: ${state[optionSetting] ? 'Bật' : 'Tắt'}</span>
                 </button>
-              ` : ''}
               <button onclick="openAddTestModal('${skill}')" class="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-pastelBlue-300 to-pastelPink-300 hover:from-pastelBlue-400 hover:to-pastelPink-400 text-slate-800 hover:text-white font-display font-bold text-xs sm:text-sm shadow-sm transition flex items-center gap-2">
                 <span>＋</span><span>Thêm đề mới</span>
               </button>
@@ -4013,8 +4003,8 @@
 
                     <div class="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
                       <span class="text-xs font-semibold text-slate-400">
-                        ${isReading && (state.shufflePassageQuestions || state.shuffleReadingOptions)
-                          ? `🔀 ${[state.shufflePassageQuestions ? 'Đảo câu' : '', state.shuffleReadingOptions ? 'Đảo A/B/C/D' : ''].filter(Boolean).join(' & ')}`
+                        ${(state[questionSetting] || state[optionSetting])
+                          ? `🔀 ${[state[questionSetting] ? 'Đảo câu' : '', state[optionSetting] ? 'Đảo A/B/C/D' : ''].filter(Boolean).join(' & ')}`
                           : (rec ? `Gần nhất: ${formatScore(rec.latest)}/10đ` : 'Sẵn sàng làm bài')}
                       </span>
                       <button onclick="startSkillQuiz('${skill}', '${test.id}', null)" class="px-4 py-2 rounded-xl bg-gradient-to-r from-pastelBlue-300 to-pastelPink-300 hover:from-pastelBlue-400 hover:to-pastelPink-400 text-slate-800 hover:text-white text-xs sm:text-sm font-bold shadow-sm transition">
@@ -4338,66 +4328,66 @@
        13. TABS 2 & 3: MULTIPLE-CHOICE QUIZ RUNNER (READING & LISTENING)
        ========================================================================= */
 
-    function startSkillQuiz(skill, testId, passageId = null) {
-      const test = getTestsForSkill(skill).find(t => t.id === testId);
-      if (!test) return;
+    function startSkillQuiz(skill, testId = null, passageId = null) {
+      const allTests = testId === null;
+      const tests = getTestsForSkill(skill).filter(test => allTests || test.id === testId);
+      if (!tests.length) return;
+
+      const isReading = skill === 'reading';
+      const shouldShuffle = isReading ? state.shufflePassageQuestions : state.shuffleListeningQuestions;
+      const shouldShuffleOpts = isReading ? state.shuffleReadingOptions : state.shuffleListeningOptions;
+      const questions = tests.flatMap((test, testIndex) => {
+        const sections = test.passages?.length
+          ? test.passages
+          : [{ id: null, title: '', questions: test.questions }];
+        return sections
+          .filter(section => passageId === null || section.id === Number(passageId))
+          .flatMap(section => {
+            const sectionQuestions = section.questions.map((question, index) => ({
+              ...question,
+              origNum: question.origNum || index + 1
+            }));
+            const ordered = shouldShuffle ? shuffleArray(sectionQuestions) : sectionQuestions;
+            return ordered.map(question => ({
+              ...(shouldShuffleOpts ? shuffleQuestionOptions(question) : question),
+              testIndex,
+              passageId: section.id,
+              passageTitle: section.title,
+              passageQuestionCount: section.questions.length
+            }));
+          });
+      });
+      if (!questions.length) return;
 
       cleanupActiveSessions();
       playSound('click');
 
-      const isReading = skill === 'reading';
-      const shouldShuffle = isReading && Boolean(state.shufflePassageQuestions);
-      const shouldShuffleOpts = isReading && Boolean(state.shuffleReadingOptions);
-      let flatQuestions = [];
+      const test = tests[0];
+      const skillName = isReading ? 'Reading' : 'Listening';
+      const sectionName = isReading ? 'Passage' : 'Part';
+      const durationMinutes = passageId === null ? tests.reduce((sum, item) => sum + Number(item.duration), 0) : 15;
       let sessionLabel = test.title;
-      let durationMinutes = test.duration;
       let scoreKey = `${skill}_${test.id}_full`;
-
-      if (Array.isArray(test.passages) && test.passages.length > 0) {
-        const targetPassages = passageId
-          ? test.passages.filter(p => p.id === Number(passageId))
-          : test.passages;
-
-        if (passageId && targetPassages.length > 0) {
-          sessionLabel = `${test.title} • ${isReading ? 'Passage' : 'Part'} ${passageId}`;
-          durationMinutes = isReading ? 15 : 15;
-          scoreKey = `${skill}_${test.id}_p${passageId}`;
-        } else {
-          sessionLabel = `${test.title} • Full (${test.passages.reduce((s, p) => s + p.questions.length, 0)} câu)`;
-        }
-
-        // Keep Passages/Parts in order; shuffle questions & options only when enabled for Reading
-        targetPassages.forEach(p => {
-          const orderedQs = shouldShuffle ? shuffleArray(p.questions) : [...p.questions];
-          orderedQs.forEach(q => {
-            const preparedQ = shouldShuffleOpts ? shuffleQuestionOptions(q) : { ...q, options: [...q.options] };
-            flatQuestions.push({
-              ...preparedQ,
-              passageId: p.id,
-              passageTitle: p.title
-            });
-          });
-        });
-      } else {
-        const orderedQs = shouldShuffle ? shuffleArray(test.questions) : [...test.questions];
-        flatQuestions = orderedQs.map((q, i) => {
-          const preparedQ = shouldShuffleOpts ? shuffleQuestionOptions(q) : { ...q, options: [...q.options] };
-          return {
-            ...preparedQ,
-            origNum: q.origNum || (i + 1),
-            passageId: null,
-            passageTitle: ''
-          };
-        });
+      if (allTests) {
+        sessionLabel = `Tất cả ${skillName} • ${tests.length} bộ đề`;
+        scoreKey = `${skill}_all_tests`;
+      } else if (passageId !== null) {
+        sessionLabel = `${test.title} • ${sectionName} ${passageId}`;
+        scoreKey = `${skill}_${test.id}_p${passageId}`;
+      } else if (test.passages?.length) {
+        sessionLabel = `${test.title} • Full (${questions.length} câu)`;
       }
 
       state.activeQuiz = {
         skill,
         test,
-        passageId: passageId ? Number(passageId) : null,
+        tests,
+        allTests,
+        audioTestIndex: 0,
+        passageId,
         sessionLabel,
         scoreKey,
-        questions: flatQuestions,
+        questions,
         isShuffled: shouldShuffle,
         isOptionsShuffled: shouldShuffleOpts,
         answers: {},
@@ -4459,7 +4449,8 @@
       const file = input.files && input.files[0];
       if (!file || !state.activeQuiz) return;
       const url = URL.createObjectURL(file);
-      sessionAudioMap[state.activeQuiz.test.id] = url;
+      const quiz = state.activeQuiz;
+      sessionAudioMap[quiz.tests[quiz.audioTestIndex].id] = url;
       renderApp();
       showToast(`Đã tải file nghe: ${file.name}`, 'success');
     }
@@ -4523,13 +4514,24 @@
       }
     }
 
+    function selectQuizAudioTest(index) {
+      const quiz = state.activeQuiz;
+      if (!quiz || !quiz.tests[index]) return;
+      quiz.audioTestIndex = index;
+      renderApp();
+    }
+
     function renderQuizRunner(root) {
       const quiz = state.activeQuiz;
       const { skill, test, questions, answers, submitted } = quiz;
       const isReading = skill === 'reading';
-      const audioSrc = sessionAudioMap[test.id] || test.audioUrl || '';
+      const audioTest = quiz.tests[quiz.audioTestIndex];
+      const audioSrc = sessionAudioMap[audioTest.id] || audioTest.audioUrl || '';
+      const oldAudio = root.querySelector('#quiz-audio');
+      const sameAudio = oldAudio && oldAudio.dataset.testId === audioTest.id && oldAudio.getAttribute('src') === audioSrc;
+      const playback = sameAudio ? { time: oldAudio.currentTime, playing: !oldAudio.paused && !oldAudio.ended } : null;
+      const navigatorScroll = root.querySelector('#quiz-question-nav')?.scrollTop ?? 0;
       const letters = ['A', 'B', 'C', 'D'];
-      const hasPassages = questions.some(q => q.passageId !== null);
 
       root.innerHTML = `
         <div class="space-y-5 animate-fade-up">
@@ -4550,7 +4552,7 @@
                 <div class="px-4 py-2 rounded-xl bg-pastelMint-50 border border-pastelMint-200 text-emerald-700 font-display font-extrabold text-sm sm:text-base">
                   Kết quả: ${quiz.scoreCount}/${questions.length} (${formatScore(quiz.score10)}/10đ)
                 </div>
-                <button onclick="startSkillQuiz('${skill}', '${test.id}', ${quiz.passageId !== null ? quiz.passageId : 'null'})" class="px-4 py-2 rounded-xl bg-pastelBlue-100 hover:bg-pastelBlue-200 text-sky-800 text-xs sm:text-sm font-bold transition">🔄 Đảo đề & làm lại</button>
+                <button onclick="${quiz.allTests ? `startSkillQuiz('${skill}')` : `startSkillQuiz('${skill}', '${test.id}', ${quiz.passageId})`}" class="px-4 py-2 rounded-xl bg-pastelBlue-100 hover:bg-pastelBlue-200 text-sky-800 text-xs sm:text-sm font-bold transition">🔄 ${quiz.isShuffled || quiz.isOptionsShuffled ? 'Đảo đề & làm lại' : 'Làm lại'}</button>
               ` : `
                 <div class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200">
                   <span>⏱️</span>
@@ -4571,7 +4573,7 @@
             <!-- Left Column: Passage / Audio + Question Navigator -->
             <div class="lg:col-span-4 space-y-4 lg:sticky lg:top-[155px]">
               ${isReading ? (
-                test.passage ? `
+                !quiz.allTests && test.passage ? `
                   <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-card max-h-[52vh] overflow-y-auto space-y-2">
                     <div class="text-xs font-extrabold text-sky-600 uppercase">📖 Đoạn văn đọc hiểu</div>
                     <div class="text-sm text-slate-700 leading-relaxed whitespace-pre-line">${escapeHtml(test.passage)}</div>
@@ -4580,8 +4582,14 @@
               ) : `
                 <div class="bg-white rounded-2xl p-5 border border-slate-100 shadow-card space-y-3">
                   <div class="text-xs font-extrabold text-rose-500 uppercase">🎧 Trình phát âm thanh</div>
+                  ${quiz.allTests ? `
+                    <label for="quiz-audio-test" class="block text-xs font-bold text-slate-600">Chọn đề để nghe</label>
+                    <select id="quiz-audio-test" onchange="selectQuizAudioTest(Number(this.value))" class="w-full rounded-xl border border-slate-200 bg-white p-2 text-sm text-slate-700">
+                      ${quiz.tests.map((item, index) => `<option value="${index}" ${index === quiz.audioTestIndex ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}
+                    </select>
+                  ` : ''}
                   ${audioSrc ? `
-                    <audio controls class="w-full rounded-xl" src="${escapeHtml(audioSrc)}">Trình duyệt không hỗ trợ phát audio.</audio>
+                    <audio id="quiz-audio" data-test-id="${escapeHtml(audioTest.id)}" controls class="w-full rounded-xl" src="${escapeHtml(audioSrc)}">Trình duyệt không hỗ trợ phát audio.</audio>
                   ` : `
                     <div class="p-4 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center space-y-2">
                       <p class="text-xs text-slate-500 font-semibold">Chưa có tệp âm thanh được gắn cho đề này.</p>
@@ -4600,7 +4608,7 @@
                   <span class="text-xs font-extrabold text-slate-500 uppercase">Bảng câu hỏi</span>
                   <span class="text-xs font-bold text-slate-400">Đã chọn: ${Object.keys(answers).length}/${questions.length}</span>
                 </div>
-                <div class="grid grid-cols-5 sm:grid-cols-8 lg:grid-cols-5 gap-2">
+                <div id="quiz-question-nav" class="grid grid-cols-5 sm:grid-cols-8 lg:grid-cols-5 gap-2 max-h-[30vh] overflow-y-auto">
                   ${questions.map((q, idx) => {
                     const userAns = answers[idx];
                     const isAnswered = userAns !== undefined;
@@ -4622,13 +4630,22 @@
             <div class="lg:col-span-8 space-y-4">
               ${questions.map((q, qIdx) => {
                 const userAns = answers[qIdx];
-                const showPassageHeader = hasPassages && (qIdx === 0 || questions[qIdx - 1].passageId !== q.passageId);
+                const questionTest = quiz.tests[q.testIndex];
+                const startsTest = qIdx === 0 || questions[qIdx - 1].testIndex !== q.testIndex;
+                const showPassageHeader = q.passageId !== null && (startsTest || questions[qIdx - 1].passageId !== q.passageId);
 
                 return `
+                  ${quiz.allTests && startsTest ? `
+                    <section class="rounded-2xl bg-white p-5 border border-slate-100 shadow-card space-y-2">
+                      <h3 class="font-display font-extrabold text-base text-slate-800">${escapeHtml(questionTest.title)}</h3>
+                      ${isReading && questionTest.passage ? `<div class="text-sm text-slate-700 leading-relaxed whitespace-pre-line">${escapeHtml(questionTest.passage)}</div>` : ''}
+                      ${!isReading ? `<button type="button" onclick="selectQuizAudioTest(${q.testIndex}); document.getElementById('quiz-audio-test').scrollIntoView({block: 'center'})" class="text-sm font-bold text-sky-700">🎧 Chọn âm thanh đề này</button>` : ''}
+                    </section>
+                  ` : ''}
                   ${showPassageHeader ? `
                     <div class="px-4 py-3 rounded-2xl bg-gradient-to-r from-pastelBlue-100/80 to-pastelPink-100/60 border border-pastelBlue-200/80 flex items-center justify-between gap-2 ${qIdx > 0 ? 'mt-6' : ''}">
                       <span class="font-display font-bold text-sm sm:text-base text-slate-800">📑 ${escapeHtml(q.passageTitle)}</span>
-                      <span class="text-[11px] font-bold text-sky-700 bg-white/80 px-2.5 py-0.5 rounded-full">${isReading && quiz.isShuffled ? '10 câu (đã đảo thứ tự)' : `${questions.filter(item => item.passageId === q.passageId).length} câu`}</span>
+                      <span class="text-[11px] font-bold text-sky-700 bg-white/80 px-2.5 py-0.5 rounded-full">${q.passageQuestionCount} câu${quiz.isShuffled ? ' (đã đảo thứ tự)' : ''}</span>
                     </div>
                   ` : ''}
 
@@ -4639,7 +4656,7 @@
                         ${escapeHtml(q.text)}
                       </h3>
                       <div class="flex items-center gap-1.5 shrink-0">
-                        ${submitted && q.origNum ? `<span class="text-[11px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">Gốc #${q.origNum}</span>` : ''}
+                        ${(submitted || (!isReading && quiz.isShuffled)) && q.origNum ? `<span class="text-[11px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">Gốc #${q.origNum}</span>` : ''}
                         ${submitted ? (
                           userAns === q.answer
                             ? `<span class="text-xs font-bold text-emerald-600 bg-pastelMint-50 px-2 py-1 rounded-lg">✓ Đúng</span>`
@@ -4682,6 +4699,17 @@
           </div>
         </div>
       `;
+
+      root.querySelector('#quiz-question-nav').scrollTop = navigatorScroll;
+      if (playback) {
+        const player = root.querySelector('#quiz-audio');
+        const restorePlayback = () => {
+          player.currentTime = playback.time;
+          if (playback.playing) player.play().catch(() => {});
+        };
+        if (player.readyState > 0) restorePlayback();
+        else player.addEventListener('loadedmetadata', restorePlayback, { once: true });
+      }
     }
 
     /* =========================================================================
